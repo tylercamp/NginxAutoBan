@@ -15,6 +15,25 @@ Monitors your NGINX log files for any matching patterns, and will ban the IPs se
 > ./NginxAutoBan
 ```
 
+### Default `appsettings.json` file:
+```
+{
+  "Scanning": {
+    "ViolationsThreshold": 5,
+    "IpAddressPattern": "^(\\d+\\.\\d+\\.\\d+\\.\\d+)",
+    "Patterns": [
+      "\\.php HTTP"
+    ]
+  },
+
+  "Nginx": {
+    "LogFolder": "/var/log/nginx",
+    "RulesFile": "/etc/nginx/autoblockips.conf"
+  }
+}
+```
+
+### Behavior
 Edit the `appsettings.json` file and restart NAB to change the config. By default, it will:
 
 1. Output all logs to `../Logs/` (`Serilog.MinimumLevel.Default`)
