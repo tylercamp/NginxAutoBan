@@ -10,11 +10,11 @@ namespace NAB
     {
         private List<String> matchedStrings;
         private List<Regex> matchedRegexes;
-        private Regex ipRegex;
+        private List<Regex> ipRegexes;
 
-        public NginxLogParser(Regex ipRegex, List<String> matchers)
+        public NginxLogParser(IEnumerable<Regex> ipRegexes, IEnumerable<String> matchers)
         {
-            this.ipRegex = ipRegex;
+            this.ipRegexes = ipRegexes.ToList();
 
             this.matchedStrings = new List<string>();
             this.matchedRegexes = new List<Regex>();
@@ -39,11 +39,14 @@ namespace NAB
             found = this.matchedStrings.Any(str => logLine.ToLower().Contains(str));
             found = found || this.matchedRegexes.Any(reg => reg.IsMatch(logLine));
 
-            // TODO - Support multiple IP match formats
-            if (!found || !ipRegex.IsMatch(logLine))
+            if (!found)
                 return null;
 
-            var ip = ipRegex.Match(logLine).Captures[0].Value;
+            var ipMatch = ipRegexes.Where(r => r.IsMatch(logLine)).Select(r => r.Match(logLine)).FirstOrDefault();
+            if (ipMatch == null)
+                return null;
+
+            var ip = ipMatch.Captures[0].Value;
             return ip.Trim();
         }
     }

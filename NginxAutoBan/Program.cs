@@ -1,6 +1,7 @@
 ﻿using Serilog;
 using System;
 using System.IO;
+using System.Linq;
 using System.Runtime.Loader;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -33,8 +34,8 @@ namespace NAB
 
             logger.Information("Successfully validated configuration.");
 
-            var logParser = new NginxLogParser(new Regex(config.Scanning.IpAddressPattern), config.Scanning.Patterns);
-            var ipBlocker = new NginxBlockedIps(config.Nginx.RulesFile, config.Scanning.ViolationsThreshold);
+            var logParser = new NginxLogParser(config.Scanning.IpAddressPatterns.Select(p => new Regex(p)), config.Scanning.Patterns);
+            using (var ipBlocker = new NginxBlockedIps(config.Nginx.RulesFile, config.Scanning.ViolationsThreshold))
             using (var logFolder = new NginxLogsWatcher(config.Nginx.LogFolder))
             {
                 logFolder.NewLine += (fullPath, text) =>

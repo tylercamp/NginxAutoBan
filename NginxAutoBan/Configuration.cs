@@ -54,7 +54,7 @@ namespace NAB
         public class ScanningConfig
         {
             public List<String> Patterns { get; set; }
-            public String IpAddressPattern { get; set; }
+            public List<String> IpAddressPatterns { get; set; }
             public int ViolationsThreshold { get; set; }
         }
 
@@ -62,14 +62,25 @@ namespace NAB
         {
             bool isValid = true;
 
-            try
-            {
-                new Regex(Scanning.IpAddressPattern);
-            }
-            catch (Exception e)
+            if (Scanning.IpAddressPatterns == null || Scanning.IpAddressPatterns.Count == 0)
             {
                 isValid = false;
-                Log.Error("Invalid value for {name}: {value}, error: {error}", nameof(Scanning.IpAddressPattern), Scanning.IpAddressPattern, e.Message);
+                Log.Error("IpAddressPatterns is empty or null");
+            }
+            else
+            {
+                foreach (var pattern in Scanning.IpAddressPatterns)
+                {
+                    try
+                    {
+                        new Regex(pattern);
+                    }
+                    catch (Exception e)
+                    {
+                        isValid = false;
+                        Log.Error("Invalid value for IpAddressPattern {pattern}: {error}", pattern, e.Message);
+                    }
+                }
             }
 
             DirectoryInfo nginxLogFolder = null;

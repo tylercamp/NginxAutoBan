@@ -7,17 +7,22 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
+
 
 namespace NAB
 {
-    class NginxBlockedIps
+    class NginxBlockedIps : IDisposable
     {
         private String rulesFilePath;
         private List<String> knownBlockedIps;
         private Regex matchDenyIpRegex = new Regex(@"deny\s+(.+);");
-
         private ILogger logger = Log.ForContext<NginxBlockedIps>();
         private int blockThreshold;
+        private Task nginxReloadTask;
+        private CancellationTokenSource cts = new CancellationTokenSource();
+        private bool refreshRequested = false;
 
         private ConcurrentDictionary<String, int> pendingIpBlockings = new ConcurrentDictionary<string, int>();
 
@@ -27,9 +32,43 @@ namespace NAB
             this.blockThreshold = blockThreshold;
 
             ReloadIpBlacklist();
+
+            Task.Factory.StartNew(() => {
+                while (!cts.IsCancellationRequested) {
+
+                    if (refreshRequested) {
+                        try
+                        {
+                            logger.Information("Reloading nginx config");
+
+                            var psi = new ProcessStartInfo
+                            {
+                                FileName = "nginx",
+                                Arguments = "-s reload",
+                                UseShellExecute = false
+                            };
+
+                            var proc = new Process { StartInfo = psi };
+                            proc.Start();
+                            while (!proc.HasExited && !cts.IsCancellationRequested)
+                                Task.Delay(10, cts.Token).Wait();
+                        }
+                        catch (Exception e)
+                        {
+                            logger.Warning("Exception occurred when reloading nginx config: {message}", e.Message);
+                        }
+
+                        refreshRequested = false;
+                    }
+
+                    Task.Delay(5000, cts.Token).Wait();
+                }                
+            });
         }
 
         public IEnumerable<String> BlockedIps => this.knownBlockedIps;
+
+        public bool AutoRefreshNginx { get; set; } = true;
 
         public void ReloadIpBlacklist()
         {
@@ -67,15 +106,7 @@ namespace NAB
                     logger.Information("Applying IP block on {ip} for {numStrikes}/{threshold} strikes", ip, numStrikes, blockThreshold);
                     File.AppendAllText(rulesFilePath, $"deny {ip};\n");
                     knownBlockedIps.Add(ip);
-
-                    try
-                    {
-                        ReloadNginxConfig();
-                    }
-                    catch (Exception e)
-                    {
-                        logger.Warning("Exception occurred when reloading nginx config: {message}", e.Message);
-                    }
+                    refreshRequested = true;
                 }
                 else
                 {
@@ -84,20 +115,11 @@ namespace NAB
             }
         }
 
-        public void ReloadNginxConfig()
+        public void Dispose()
         {
-            logger.Information("Reloading nginx config");
-
-            var psi = new ProcessStartInfo
-            {
-                FileName = "nginx",
-                Arguments = "-s reload",
-                UseShellExecute = false
-            };
-
-            var proc = new Process { StartInfo = psi };
-            proc.Start();
-            proc.WaitForExit();
+            cts.Cancel();
+            while (!nginxReloadTask.IsCompleted)
+                Task.Delay(10).Wait();
         }
     }
 }
