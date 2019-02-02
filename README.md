@@ -20,7 +20,9 @@ Monitors your NGINX log files for any matching patterns, and will ban the IPs se
 {
   "Scanning": {
     "ViolationsThreshold": 5,
-    "IpAddressPattern": "^(\\d+\\.\\d+\\.\\d+\\.\\d+)",
+    "IpAddressPatterns": [
+      "^(\\d+\\.\\d+\\.\\d+\\.\\d+)"
+    ],
     "Patterns": [
       "\\.php HTTP"
     ]
@@ -39,7 +41,7 @@ Edit the `appsettings.json` file and restart NAB to change the config. By defaul
 1. Output all logs to `../Logs/` (`Serilog.MinimumLevel.Default`)
 2. Watch all non-gz files in the NGINX log folder at `/var/log/nginx` for changes (`Nginx.LogFolder`)
 3. Check each message for anything containing `".php HTTP"`, indicating a request for a PHP file (`Scanning.Patterns`)
-4. Grab the source IP of the request with the regex `/^(\d+\.\d+\.\d+\.\d+)/` (`Scanning.IpAddressPattern`) and keep a record of a "strike" against that IP for making a malicious request
+4. Grab the source IP of the request with the regex `/^(\d+\.\d+\.\d+\.\d+)/` (`Scanning.IpAddressPatterns`) and keep a record of a "strike" against that IP for making a malicious request
 5. Collect strikes against an IP until at least 5 strikes were made (`Scanning.ViolationsThreshold`)
 6. Modify an NGINX config file `/etc/nginx/autoblockips.conf` and append `deny <IP>;` (`Nginx.RulesFile`)
 7. Reload NGINX config with `nginx -s reload` when a ban is added
@@ -71,7 +73,7 @@ Environment=Serilog__MinimumLevel=Information
 Environment=Serilog__WriteTo__1__Args__pathFormat="../autoban-logs/log-{Date}.log"
 
 Environment=Scanning__ViolationsThreshold=5
-Environment=Scanning__IpAddressPattern="^(\\d+\\.\\d+\\.\\d+\\.\\d+)"
+Environment=Scanning__IpAddressPatterns__0="^(\\d+\\.\\d+\\.\\d+\\.\\d+)"
 
 Environment=Scanning__Patterns__0="\\.php HTTP"
 Environment=Scanning__Patterns__1="GET \\/RSeR HTTP"
