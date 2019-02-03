@@ -13,88 +13,80 @@ namespace NAB
 {
     class NginxLogsWatcher : IDisposable
     {
-        private class StreamingContext : IDisposable
+        private class StreamingContext
         {
             private ILogger logger = Log.ForContext<StreamingContext>();
-            private FileStream fileStream;
-            private StreamReader streamReader;
-            private GZipStream gzipStream;
-
             private StringBuilder pendingLine = new StringBuilder();
-            private bool isDisposing = false;
+            private long streamPosition = 0;
+            private String filePath;
 
             public StreamingContext(String filePath)
             {
-                Reopen(filePath);
+                this.filePath = filePath;
+                Rename(filePath);
             }
 
-            public void Reopen(String filePath)
+            public void Rename(String filePath)
             {
-                long streamPosition = 0;
-                if (fileStream != null)
-                {
-                    streamPosition = fileStream.Position;
-                    streamReader.Dispose();
-                    gzipStream?.Dispose();
-                    fileStream.Dispose();
-                }
-
-                fileStream = File.Open(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-
-                if (filePath.EndsWith(".gz"))
-                {
-                    gzipStream = new GZipStream(fileStream, CompressionMode.Decompress, true);
-                    streamReader = new StreamReader(gzipStream, Encoding.Default);
-                }
-                else
-                {
-                    streamReader = new StreamReader(fileStream, Encoding.Default);
-                }
-
-                fileStream.Position = Math.Min(streamPosition, fileStream.Length);
+                this.filePath = filePath;
             }
             
-            public List<String> ReadPendingText(CancellationToken cancellationToken)
+            public IEnumerable<String> ReadPendingText(CancellationToken cancellationToken)
             {
-                List<String> result = new List<string>();
-                while (!cancellationToken.IsCancellationRequested && !isDisposing)
+                using (var fs = File.Open(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
                 {
-                    try
-                    {
-                        if (streamReader.EndOfStream)
-                            break;
+                    fs.Position = Math.Min(streamPosition, fs.Length);
 
-                        char c = (char)streamReader.Read();
-                        if (c == '\n' || c == '\r')
+                    GZipStream gzs = null;
+                    StreamReader sr = null;
+                    if (filePath.EndsWith(".gz"))
+                    {
+                        gzs = new GZipStream(fs, CompressionMode.Decompress, true);
+                        sr = new StreamReader(gzs);
+                    }
+                    else
+                    {
+                        sr = new StreamReader(fs);
+                    }
+
+                    while (!cancellationToken.IsCancellationRequested)
+                    {
+                        String newLine = null;
+                        try
                         {
-                            if (pendingLine.Length > 0)
+                            if (sr.EndOfStream)
+                                break;
+
+                            char c = (char)sr.Read();
+                            if (c == '\n' || c == '\r')
                             {
-                                var line = pendingLine.ToString();
-                                logger.Verbose("Got line: {line}", line);
-                                result.Add(line);
-                                pendingLine.Clear();
+                                if (pendingLine.Length > 0)
+                                {
+                                    newLine = pendingLine.ToString();
+                                    logger.Verbose("Got line: {line}", newLine);
+                                    pendingLine.Clear();
+                                }
+                            }
+                            else
+                            {
+                                pendingLine.Append(c);
                             }
                         }
-                        else
+                        catch (Exception e)
                         {
-                            pendingLine.Append(c);
+                            logger.Warning("Exception occurred reading pending text: {message}", e.Message);
+                            break;
                         }
+
+                        if (newLine != null)
+                            yield return newLine;
                     }
-                    catch (Exception e)
-                    {
-                        logger.Warning("Exception occurred reading pending text: {message}", e.Message);
-                    }
+
+                    streamPosition = fs.Position;
+
+                    sr?.Dispose();
+                    gzs?.Dispose();
                 }
-                return result;
-            }
-
-            public void Dispose()
-            {
-                isDisposing = true;
-
-                try { streamReader.Dispose(); } catch { }
-                try { gzipStream?.Dispose(); } catch { }
-                try { fileStream.Dispose(); } catch { }
             }
         }
 
@@ -118,6 +110,8 @@ namespace NAB
         private ConcurrentDictionary<String, StreamingContext> watchedFiles = new ConcurrentDictionary<string, StreamingContext>();
         private CancellationTokenSource cancellationTokenSource = new CancellationTokenSource();
         private int jobCounter = 0;
+
+        private bool IsArchivedFile(String path) => path.ToLower().EndsWith(".gz");
 
         public NginxLogsWatcher(String logFolderPath)
         {
@@ -162,46 +156,40 @@ namespace NAB
                 Task.Delay(10).Wait();
 
             this.logFolderWatcher.Dispose();
-
-            foreach (var context in watchedFiles.Values)
-                context.Dispose();
         }
         
         private void ReadWatchedFiles()
         {
-            logger.Debug("Reading current file contents...");
-            var readLineTasks = watchedFiles.Select(kvp =>
+            void ParsePendingText(String fileName, StreamingContext context)
             {
-                return new
-                {
-                    File = kvp.Key,
-                    Task = Task.Run(() => kvp.Value.ReadPendingText(cancellationTokenSource.Token))
-                };
-            }).ToList();
+                foreach (var line in context.ReadPendingText(cancellationTokenSource.Token))
+                    NewLine?.Invoke(fileName, line);
+            }
 
-            var waitTask = Task.WhenAll(readLineTasks.Select(t => t.Task).ToArray());
-            while (!waitTask.IsCompleted)
-                Task.Delay(10);
+            logger.Debug("Reading and parsing current file contents...");
+            var readLineTasks = watchedFiles.Select(kvp =>
+                Task.Run(() => ParsePendingText(kvp.Key, kvp.Value))
+            ).ToList();
+
+            using (new Profiler("Read initial file contents", logger))
+            {
+                var waitTask = Task.WhenAll(readLineTasks.ToArray());
+                while (!waitTask.IsCompleted)
+                    Task.Delay(10);
+            }
+
+            logger.Debug("Read tasks finished");
 
             if (cancellationTokenSource.IsCancellationRequested)
                 return;
 
-            logger.Debug("Finished reading");
+            var archiveFiles = watchedFiles.Keys.Where(IsArchivedFile).ToList();
+            logger.Debug("Removing {count} archives from set of watched files...", archiveFiles.Count);
+            foreach (var file in archiveFiles)
+                watchedFiles.Remove(file, out StreamingContext _);
 
-            foreach (var task in readLineTasks)
-            {
-                foreach (var line in task.Task.Result)
-                {
-                    try
-                    {
-                        NewLine?.Invoke(task.File, line);
-                    }
-                    catch (Exception e)
-                    {
-                        logger.Warning("Exception in NewLine callback for line '{line}': {exception}", line, e);
-                    }
-                }
-            }
+            using (new Profiler("Running GC for cleaned streams", logger))
+                GC.Collect(2, GCCollectionMode.Forced, true, true);
 
             logger.Debug("Enabling FS watcher");
             this.logFolderWatcher.EnableRaisingEvents = true;
@@ -223,8 +211,7 @@ namespace NAB
                 logger.Debug("File {name} deleted, removing from watch-list...", e.Name);
                 try
                 {
-                    if (watchedFiles.TryRemove(e.FullPath, out StreamingContext stream))
-                        stream.Dispose();
+                    watchedFiles.TryRemove(e.FullPath, out StreamingContext _);
                 }
                 catch (Exception ex)
                 {
@@ -243,7 +230,7 @@ namespace NAB
                 {
                     if (watchedFiles.TryRemove(e.OldFullPath, out StreamingContext stream))
                     {
-                        stream.Reopen(e.FullPath);
+                        stream.Rename(e.FullPath);
                         watchedFiles.TryAdd(e.FullPath, stream);
                     }
                 }

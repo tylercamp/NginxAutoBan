@@ -16,7 +16,7 @@ namespace NAB
     class NginxBlockedIps : IDisposable
     {
         private String rulesFilePath;
-        private List<String> knownBlockedIps;
+        private ConcurrentBag<String> knownBlockedIps;
         private Regex matchDenyIpRegex = new Regex(@"deny\s+(.+);");
         private ILogger logger = Log.ForContext<NginxBlockedIps>();
         private int blockThreshold;
@@ -33,7 +33,7 @@ namespace NAB
 
             ReloadIpBlacklist();
 
-            Task.Factory.StartNew(() => {
+            nginxReloadTask = Task.Factory.StartNew(() => {
                 while (!cts.IsCancellationRequested) {
 
                     if (refreshRequested) {
@@ -61,7 +61,8 @@ namespace NAB
                         refreshRequested = false;
                     }
 
-                    Task.Delay(5000, cts.Token).Wait();
+                    try { Task.Delay(5000, cts.Token).Wait(); }
+                    catch { }
                 }                
             });
         }
@@ -75,12 +76,13 @@ namespace NAB
             logger.Debug("Reloading IP blacklist");
             lock (rulesFilePath)
             {
-                knownBlockedIps = File.ReadAllLines(rulesFilePath)
-                    .Select(l => matchDenyIpRegex.Matches(l))
-                    .Where(mc => mc.Count > 0)
-                    .SelectMany(mc => mc.SelectMany(m => m.Groups.Skip(1).Select(c => c.Value.Trim())))
-                    .Distinct()
-                    .ToList();
+                knownBlockedIps = new ConcurrentBag<string>(
+                    File.ReadAllLines(rulesFilePath)
+                        .Select(l => matchDenyIpRegex.Matches(l))
+                        .Where(mc => mc.Count > 0)
+                        .SelectMany(mc => mc.SelectMany(m => m.Groups.Skip(1).Select(c => c.Value.Trim())))
+                        .Distinct()
+                );
             }
             logger.Debug("Got {numIps} IPs", knownBlockedIps.Count);
         }
@@ -93,25 +95,23 @@ namespace NAB
 
         public void BlockIp(String ip)
         {
-            lock (rulesFilePath)
-            {
-                ip = ip.Trim();
-                if (ContainsIp(ip))
-                    return;
+            ip = ip.Trim();
+            if (ContainsIp(ip))
+                return;
 
-                int numStrikes = pendingIpBlockings.AddOrUpdate(ip, 1, (_, c) => c + 1);
-                if (numStrikes >= blockThreshold)
-                {
-                    pendingIpBlockings.TryRemove(ip, out numStrikes);
-                    logger.Information("Applying IP block on {ip} for {numStrikes}/{threshold} strikes", ip, numStrikes, blockThreshold);
+            int numStrikes = pendingIpBlockings.AddOrUpdate(ip, 1, (_, c) => c + 1);
+            if (numStrikes >= blockThreshold)
+            {
+                pendingIpBlockings.TryRemove(ip, out numStrikes);
+                logger.Information("Applying IP block on {ip} for {numStrikes}/{threshold} strikes", ip, numStrikes, blockThreshold);
+                knownBlockedIps.Add(ip);
+                lock (rulesFilePath)
                     File.AppendAllText(rulesFilePath, $"deny {ip};\n");
-                    knownBlockedIps.Add(ip);
-                    refreshRequested = true;
-                }
-                else
-                {
-                    logger.Debug("1 strike against {ip} (currently at {numStrikes})", ip, numStrikes);
-                }
+                refreshRequested = true;
+            }
+            else
+            {
+                logger.Debug("1 strike against {ip} (currently at {numStrikes})", ip, numStrikes);
             }
         }
 
