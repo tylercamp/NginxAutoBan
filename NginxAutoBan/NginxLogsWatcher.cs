@@ -142,7 +142,10 @@ namespace NAB
 
             logger.Debug("Found {count} existing files", watchedFiles.Count);
 
-            Task.Factory.StartNew(ReadWatchedFiles, TaskCreationOptions.LongRunning);
+            Task.Factory.StartNew(() => {
+                using (new JobContext(this)) 
+                    ReadWatchedFiles();
+            }, TaskCreationOptions.LongRunning);
         }
 
         public delegate void NewLineHandler(String sourceFileName, String text);
@@ -199,6 +202,9 @@ namespace NAB
         {
             lock (watchedFiles)
             {
+                if (IsArchivedFile(e.Name))
+                    return;
+
                 logger.Debug("File {name} created, watching...", e.Name);
                 watchedFiles.TryAdd(e.FullPath, new StreamingContext(e.FullPath));
             }

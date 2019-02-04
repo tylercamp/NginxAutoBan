@@ -49,12 +49,14 @@ namespace NAB
         {
             public String LogFolder { get; set; }
             public String RulesFile { get; set; }
+            public int MaxRefreshInterval { get; set; }
         }
 
         public class ScanningConfig
         {
             public List<String> Patterns { get; set; }
             public List<String> IpAddressPatterns { get; set; }
+            public List<String> WhitelistedIps { get; set; }
             public int ViolationsThreshold { get; set; }
         }
 

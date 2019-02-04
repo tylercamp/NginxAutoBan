@@ -23,20 +23,32 @@ namespace NAB
         private Task nginxReloadTask;
         private CancellationTokenSource cts = new CancellationTokenSource();
         private bool refreshRequested = false;
+        private List<Matcher> whitelistedIps;
 
         private ConcurrentDictionary<String, int> pendingIpBlockings = new ConcurrentDictionary<string, int>();
 
-        public NginxBlockedIps(String rulesFilePath, int blockThreshold)
+        public NginxBlockedIps(String rulesFilePath, int blockThreshold, int maxRefreshInterval, IEnumerable<String> whitelistedIps)
         {
             this.rulesFilePath = rulesFilePath;
             this.blockThreshold = blockThreshold;
 
+            this.whitelistedIps = (whitelistedIps ?? Enumerable.Empty<String>()).Select(t => new Matcher(t)).ToList();
+
             ReloadIpBlacklist();
 
             nginxReloadTask = Task.Factory.StartNew(() => {
+
+                var sw = Stopwatch.StartNew();
+
                 while (!cts.IsCancellationRequested) {
 
-                    if (refreshRequested) {
+                    if (!(sw.Elapsed.TotalSeconds > maxRefreshInterval && refreshRequested))
+                    {
+                        try { Task.Delay(100, cts.Token).Wait(); }
+                        catch { break; }
+                    }
+                    else
+                    {
                         try
                         {
                             logger.Information("Reloading nginx config");
@@ -50,19 +62,19 @@ namespace NAB
 
                             var proc = new Process { StartInfo = psi };
                             proc.Start();
-                            while (!proc.HasExited && !cts.IsCancellationRequested)
-                                Task.Delay(10, cts.Token).Wait();
+                            while (!proc.HasExited && !cts.IsCancellationRequested) {
+                                try { Task.Delay(10, cts.Token).Wait(); }
+                                catch { break; }
+                            }
                         }
                         catch (Exception e)
                         {
                             logger.Warning("Exception occurred when reloading nginx config: {message}", e.Message);
                         }
 
+                        sw.Restart();
                         refreshRequested = false;
                     }
-
-                    try { Task.Delay(5000, cts.Token).Wait(); }
-                    catch { }
                 }                
             });
         }
@@ -87,11 +99,9 @@ namespace NAB
             logger.Debug("Got {numIps} IPs", knownBlockedIps.Count);
         }
 
-        public bool ContainsIp(String ip)
-        {
-            ip = ip.Trim();
-            return knownBlockedIps.Contains(ip);
-        }
+        public bool IsWhitelisted(String ip) => whitelistedIps.Any(m => m.IsMatch(ip));
+
+        public bool ContainsIp(String ip) => knownBlockedIps.Contains(ip.Trim());
 
         public void BlockIp(String ip)
         {

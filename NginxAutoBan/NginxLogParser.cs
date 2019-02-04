@@ -8,36 +8,20 @@ namespace NAB
 {
     class NginxLogParser
     {
-        private List<String> matchedStrings;
-        private List<Regex> matchedRegexes;
+        private List<Matcher> matchers;
         private List<Regex> ipRegexes;
 
         public NginxLogParser(IEnumerable<Regex> ipRegexes, IEnumerable<String> matchers)
         {
             this.ipRegexes = ipRegexes.ToList();
-
-            this.matchedStrings = new List<string>();
-            this.matchedRegexes = new List<Regex>();
-
-            foreach (var matcher in matchers)
-            {
-                try
-                {
-                    this.matchedRegexes.Add(new Regex(matcher));
-                }
-                catch
-                {
-                    this.matchedStrings.Add(matcher);
-                }
-            }
+            this.matchers = matchers.Select(t => new Matcher(t)).ToList();
         }
 
         public String GetMatchedIp(String logLine)
         {
             bool found = false;
 
-            found = this.matchedStrings.Any(str => logLine.ToLower().Contains(str));
-            found = found || this.matchedRegexes.Any(reg => reg.IsMatch(logLine));
+            found = matchers.Any(m => m.IsMatch(logLine));
 
             if (!found)
                 return null;

@@ -5,6 +5,7 @@ using System.Linq;
 using System.Runtime.Loader;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using System.Threading;
 
 namespace NAB
 {
@@ -35,7 +36,7 @@ namespace NAB
             logger.Information("Successfully validated configuration.");
 
             var logParser = new NginxLogParser(config.Scanning.IpAddressPatterns.Select(p => new Regex(p)), config.Scanning.Patterns);
-            using (var ipBlocker = new NginxBlockedIps(config.Nginx.RulesFile, config.Scanning.ViolationsThreshold))
+            using (var ipBlocker = new NginxBlockedIps(config.Nginx.RulesFile, config.Scanning.ViolationsThreshold, config.Nginx.MaxRefreshInterval, config.Scanning.WhitelistedIps))
             using (var logFolder = new NginxLogsWatcher(config.Nginx.LogFolder))
             {
                 logFolder.NewLine += (fullPath, text) =>
@@ -47,6 +48,12 @@ namespace NAB
                     if (ip == null)
                     {
                         logger.Verbose("Ignoring line from {fileName} since there were no matches: {line}", text);
+                        return;
+                    }
+
+                    if (ipBlocker.IsWhitelisted(ip))
+                    {
+                        logger.Verbose("Ignoring line from {fileName} since {ip} is whitelisted", fileName, ip);
                         return;
                     }
 
