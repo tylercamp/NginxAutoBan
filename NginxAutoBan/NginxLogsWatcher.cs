@@ -35,7 +35,7 @@ namespace NAB
             {
                 using (var fs = File.Open(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
                 {
-                    fs.Position = Math.Min(streamPosition, fs.Length);
+                    fs.Position = Math.Clamp(streamPosition, 0, fs.Length - 1);
 
                     GZipStream gzs = null;
                     StreamReader sr = null;
@@ -74,7 +74,7 @@ namespace NAB
                         }
                         catch (Exception e)
                         {
-                            logger.Warning("Exception occurred reading pending text: {message}", e.Message);
+                            logger.Warning("Exception occurred reading pending text from {fileName}: {message}\n{stackTrace}", Path.GetFileName(filePath), e.Message, e.StackTrace);
                             break;
                         }
 
